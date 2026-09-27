@@ -3,6 +3,9 @@ package dev.minios.ocremote.data.api
 import dev.minios.ocremote.logging.AppLogger as Log
 import dev.minios.ocremote.BuildConfig
 import dev.minios.ocremote.domain.model.*
+import dev.minios.ocremote.data.api.v2.ServerApiVersion
+import dev.minios.ocremote.data.api.v2.ServerVersionRegistry
+import dev.minios.ocremote.data.api.v2.V2EventParser
 import io.ktor.client.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
@@ -54,7 +57,9 @@ internal fun isHighFrequencySseEvent(event: SseEvent): Boolean = when (event) {
 @Singleton
 class SseClient @Inject constructor(
     private val httpClient: HttpClient,
-    private val json: Json
+    private val json: Json,
+    private val versionRegistry: ServerVersionRegistry,
+    private val v2EventParser: V2EventParser,
 ) {
 
     /**
@@ -68,8 +73,9 @@ class SseClient @Inject constructor(
         directory: String? = null,
         onOpen: suspend () -> Unit = {},
     ): Flow<ScopedSseEvent> = flow {
-        val sseUrl = "${conn.baseUrl}/global/event"
-        Log.i(TAG, "Connecting to global SSE (auth=${conn.authHeader != null})")
+        val isV2 = versionRegistry.version(conn) == ServerApiVersion.V2
+        val sseUrl = if (isV2) "${conn.baseUrl}/api/event" else "${conn.baseUrl}/global/event"
+        Log.i(TAG, "Connecting to ${if (isV2) "V2" else "V1"} SSE (auth=${conn.authHeader != null})")
 
         val statement = httpClient.prepareGet(sseUrl) {
             conn.authHeader?.let { header("Authorization", it) }
@@ -113,12 +119,12 @@ class SseClient @Inject constructor(
                         throw SseConnectionException("SSE stream timed out")
                     }
                 decoder.accept(line)?.let { data ->
-                    eventCount += processFrame(data) { emit(it) }
+                    eventCount += processFrame(data, isV2) { emit(it) }
                 }
             }
 
             decoder.finish()?.let { data ->
-                eventCount += processFrame(data) { emit(it) }
+                eventCount += processFrame(data, isV2) { emit(it) }
             }
 
             if (currentCoroutineContext().isActive) {
@@ -129,9 +135,9 @@ class SseClient @Inject constructor(
         }
     }
 
-    private suspend fun processFrame(data: String, emitEvent: suspend (ScopedSseEvent) -> Unit): Int {
+    private suspend fun processFrame(data: String, isV2: Boolean, emitEvent: suspend (ScopedSseEvent) -> Unit): Int {
         return try {
-            val event = parseEvent(data) ?: return 0
+            val event = (if (isV2) v2EventParser.parse(data) else parseEvent(data)) ?: return 0
             if (event.event !is SseEvent.ServerHeartbeat) {
                 if (BuildConfig.DEBUG && !isHighFrequencySseEvent(event.event)) {
                     Log.d(TAG, "Event: ${event.event::class.simpleName}")
