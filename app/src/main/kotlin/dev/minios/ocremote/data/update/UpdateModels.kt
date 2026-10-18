@@ -4,7 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 private const val REPOSITORY_HOST = "github.com"
-private const val REPOSITORY_OWNER = "crim50n"
+private const val REPOSITORY_OWNER = "KoBadger"
 private const val REPOSITORY_NAME = "oc-remote"
 private const val APPLICATION_ID = "dev.minios.ocremote"
 
