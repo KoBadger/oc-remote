@@ -1,0 +1,103 @@
+name: CI
+
+# OC Remote is an Android app, but contributors build it from Linux, macOS and
+# Windows. This workflow proves the *dev toolchain* (gradlew + Android SDK +
+# JDK 17) works on Linux and macOS, not just on the release runner.
+# The release pipeline lives in release.yml (tagged releases only).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build + unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Android SDK components
+        run: |
+          set -e
+          # Use the Android SDK the runner images already ship. The
+          # android-actions/setup-android action is deliberately NOT used: its
+          # bundled `sdkmanager tools` call fails on recent cmdline-tools
+          # ("Failed to find package 'tools'"), because that package was
+          # removed once the SDK moved to cmdline-tools.
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "SDK root: $SDK_ROOT"
+          ls "$SDK_ROOT"
+
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager 2>/dev/null | head -n1 || true)"
+          fi
+          test -n "$SDKMANAGER" || { echo "::error::sdkmanager not found under $SDK_ROOT"; exit 1; }
+          echo "sdkmanager: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      - name: gradlew execute bit (informational)
+        run: |
+          MODE=$(git ls-files -s gradlew | awk '{print $1}')
+          if [ "$MODE" != "100755" ]; then
+            echo "::warning::gradlew is tracked as $MODE — fix with: git update-index --chmod=+x gradlew"
+          fi
+          chmod +x ./gradlew
+
+      - name: Gradle / toolchain sanity
+        run: ./gradlew --version
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: oc-remote-debug-${{ matrix.os }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  tooling:
+    # The helper scripts and metadata are plain POSIX shell / JSON; check them
+    # without the Android toolchain so failures point straight at the file.
+    name: dev tooling (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell-check the setup scripts
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do echo "bash -n $f"; bash -n "$f"; done
+
+      - name: Validate JSON metadata
+        run: |
+          python3 -m json.tool update.json > /dev/null
+          echo "update.json is valid"
