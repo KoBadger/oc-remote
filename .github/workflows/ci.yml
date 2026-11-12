@@ -36,13 +36,29 @@ jobs:
           java-version: '17'
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Ensure SDK platform 34 + build-tools
+      - name: Android SDK components
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
+          set -e
+          # Use the Android SDK the runner images already ship. The
+          # android-actions/setup-android action is deliberately NOT used: its
+          # bundled `sdkmanager tools` call fails on recent cmdline-tools
+          # ("Failed to find package 'tools'"), because that package was
+          # removed once the SDK moved to cmdline-tools.
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "SDK root: $SDK_ROOT"
+          ls "$SDK_ROOT"
+
+          SDKMANAGER="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -maxdepth 3 -type f -name sdkmanager 2>/dev/null | head -n1 || true)"
+          fi
+          test -n "$SDKMANAGER" || { echo "::error::sdkmanager not found under $SDK_ROOT"; exit 1; }
+          echo "sdkmanager: $SDKMANAGER"
+
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: gradlew execute bit (informational)
         run: |
