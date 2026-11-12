@@ -1,0 +1,87 @@
+name: CI
+
+# OC Remote is an Android app, but contributors build it from Linux, macOS and
+# Windows. This workflow proves the *dev toolchain* (gradlew + Android SDK +
+# JDK 17) works on Linux and macOS, not just on the release runner.
+# The release pipeline lives in release.yml (tagged releases only).
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build + unit tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Ensure SDK platform 34 + build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" > /dev/null
+
+      - name: gradlew execute bit (informational)
+        run: |
+          MODE=$(git ls-files -s gradlew | awk '{print $1}')
+          if [ "$MODE" != "100755" ]; then
+            echo "::warning::gradlew is tracked as $MODE — fix with: git update-index --chmod=+x gradlew"
+          fi
+          chmod +x ./gradlew
+
+      - name: Gradle / toolchain sanity
+        run: ./gradlew --version
+
+      - name: Assemble debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: oc-remote-debug-${{ matrix.os }}
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+  tooling:
+    # The helper scripts and metadata are plain POSIX shell / JSON; check them
+    # without the Android toolchain so failures point straight at the file.
+    name: dev tooling (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell-check the setup scripts
+        run: |
+          set -euo pipefail
+          for f in scripts/*.sh; do echo "bash -n $f"; bash -n "$f"; done
+
+      - name: Validate JSON metadata
+        run: |
+          python3 -m json.tool update.json > /dev/null
+          echo "update.json is valid"

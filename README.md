@@ -163,13 +163,33 @@ opencode serve --port 4096 --hostname 0.0.0.0
 
 ### Command line
 
+Works the same on **Linux, macOS and Windows** — `gradlew` is a POSIX shell
+script, so on Windows run it from Git Bash / WSL (or `gradlew.bat` from cmd).
+
+Prerequisites: **JDK 17** and the **Android SDK** (platform 34 + build-tools
+34.0.0). Point Gradle at the SDK with `ANDROID_HOME`/`ANDROID_SDK_ROOT`, or put
+`sdk.dir=...` in `local.properties` (gitignored).
+
 ```bash
 # Build debug APK
 ./gradlew assembleDebug
 
+# Unit tests
+./gradlew :app:testDebugUnitTest
+
 # Install on connected device
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+CI (`.github/workflows/ci.yml`) builds and unit-tests on **ubuntu-latest and
+macos-latest** on every push, so the toolchain stays honest on both.
+
+The `scripts/opencode-local-setup.sh` helper is aimed at Linux/Termux hosts
+where the OpenCode server runs; the app itself only needs a reachable server.
+
+On Windows checkouts Gradle sometimes arrives without the executable bit; if
+`./gradlew` says *Permission denied*, run `git update-index --chmod=+x gradlew`
+once (CI checks for this and warns).
 
 ## Trademark and branding
 
